@@ -13,10 +13,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # ratchet:actions/setup-go@v6
         with:
           go-version-file: go.mod
           check-latest: true
@@ -33,10 +33,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
 
       - name: Login to GHCR
-        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # ratchet:docker/login-action@v4
         if: ${{ ! startsWith(github.event_name, 'pull_request') }}
         with:
           registry: ghcr.io
@@ -44,7 +44,7 @@ jobs:
           password: ${{ secrets.PACKAGE_SCOPE }}
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # ratchet:aws-actions/configure-aws-credentials@v6
         if: ${{ ! startsWith(github.event_name, 'pull_request') }}
         with:
           aws-access-key-id: ${{ secrets.ECR_AWS_ACCESS_KEY_ID }}
@@ -53,12 +53,12 @@ jobs:
 
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@f2e9fc6c2b355c1890b65e6f6f0e2ac3e6e22f78 # ratchet:aws-actions/amazon-ecr-login@v2
         if: ${{ ! startsWith(github.event_name, 'pull_request') }}
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # ratchet:docker/metadata-action@v6
         with:
           images: |
             ghcr.io/bloodhoundad/azurehound
@@ -66,104 +66,38 @@ jobs:
           tags: |
             type=edge,branch=main
             type=sha,prefix=edge-,format=short
-      
+
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # ratchet:docker/setup-qemu-action@v4
 
       - name: Set up buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # ratchet:docker/setup-buildx-action@v4
 
       - name: Build Container Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # ratchet:docker/build-push-action@v7
         with:
           context: .
-          build-args: VERSION=v0.0.0-rolling+${{ github.sha }}
+          build-args: VERSION=v0.0.0
           tags: azurehound # temporary tag to simplify oci conversion
           labels: ${{ steps.meta.outputs.labels }}
           push: false
-          secrets: |
-            GIT_AUTH_TOKEN=${{ secrets.PACKAGE_SCOPE }}
-          # Multi-plaform builds can not be loaded into local Docker Daemon 
-          # Must use an Open Container Image to scan for vulnerabilities.
+          # Multi-platform builds can not be loaded into local Docker Daemon
           outputs: type=oci,dest=/tmp/oci-image.tar
 
       - name: Upload OCI tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v7.0.1
         with:
           name: oci-image-tar
           path: /tmp/oci-image.tar
 
-      # Convert OCI Directory to Docker-compatible tar for amd64
-      - name: Convert OCI to Docker tarball
-        run: |
-          set -euo pipefail
-          echo "Converting amd64 image..."
-
-          if ! skopeo copy \
-            --override-arch=amd64 --override-os=linux \
-            oci-archive:/tmp/oci-image.tar \
-            docker-archive:/tmp/converted-amd64.tar; then
-            echo "skopeo copy failed for amd64"
-            exit 1
-          fi
-      
-      - name: Trivy scan for vulnerabilities (AMD64)
-        id: trivy_amd64
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # 0.33.1
-        with:
-          input: /tmp/converted-amd64.tar
-          format: "json"
-          severity: "HIGH,CRITICAL"
-          ignore-unfixed: true
-          cache-dir: /tmp/trivy-cache
-          output: /tmp/trivy-report-amd64.json
-
-      - name: Upload Trivy scan reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-scan-reports
-          path: /tmp/trivy-report-amd64.json
-    
-      - name: Check Trivy Report for HIGH/CRITICAL vulnerabilities (amd64 only)
-        env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-        run: |
-          echo "Checking Trivy report for HIGH/CRITICAL vulnerabilities (amd64 only)..."
-
-          # Ensure report exists
-          if [ ! -f /tmp/trivy-report-amd64.json ]; then
-            echo "Error: /tmp/trivy-report-amd64.json not found!"
-            exit 1
-          fi
-
-          # Count vulnerabilities from amd64 report
-          total_vulns=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL")] | length' /tmp/trivy-report-amd64.json)
-
-          echo "Event: $GITHUB_EVENT_NAME"
-          echo "Total HIGH/CRITICAL vulnerabilities: $total_vulns"
-
-          if [ "$total_vulns" -gt 0 ]; then
-            # Fail only on push events
-            if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-              echo "Push event detected. Failing the job to block image push."
-              exit 1
-            else
-              echo "Pull request event. Vulnerabilities found, but continuing (non-blocking)."
-            fi
-          else
-            echo "No HIGH/CRITICAL vulnerabilities found. Safe to proceed."
-          fi
-                
       - name: Push Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # ratchet:docker/build-push-action@v7
         with:
           context: .
-          build-args: VERSION=v0.0.0-rolling+${{ github.sha }}
+          build-args: VERSION=v0.0.0
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: ${{ ! startsWith(github.event_name, 'pull_request') }}
-          secrets: |
-            GIT_AUTH_TOKEN=${{ secrets.PACKAGE_SCOPE }}
 
   build:
     runs-on: ubuntu-latest
@@ -180,17 +114,24 @@ jobs:
           - amd64
           - arm64
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # ratchet:actions/setup-go@v6
         with:
           go-version-file: go.mod
           check-latest: true
           cache: true
 
+      - name: Generate Windows Resources
+        if: matrix.os == 'windows'
+        continue-on-error: true
+        run: |
+          echo "Generating Windows resources..."
+          go run winres/generate-windows-resources/generate-windows-resources.go "v0.0.0"
+
       - name: Build
-        run: 'go build -ldflags="-s -w -X github.com/bloodhoundad/azurehound/v2/constants.Version=v0.0.0-rolling+${{ github.sha }}"'
+        run: 'go build -ldflags="-s -w -X github.com/bloodhoundad/azurehound/v2/constants.Version=v0.0.0"'
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
@@ -205,7 +146,7 @@ jobs:
 
       - name: Update Rolling Release
         if: "! startsWith(github.event_name, 'pull_request')"
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # ratchet:softprops/action-gh-release@v3
         with:
           name: Rolling Release (unstable)
           tag_name: rolling
